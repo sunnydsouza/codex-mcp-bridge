@@ -110,7 +110,7 @@ export class DesktopTaskDelivery {
   async status() {
     const accountContext = this.accountContext?.();
     const socketPath = this.relay.status?.({ accountContext })?.socketPath ?? this.relay.socketPath;
-    if (this.accountContext && !accountContext) return { available: false, socketPath, reason: "The current Claude and Codex accounts could not both be verified. Finish signing in and inspect the account diagnostics before sending work." };
+    if (this.accountContext && !accountContext) return { available: false, socketPath, reason: "The account context required by the configured caller mode could not be verified. Finish signing in and inspect the account diagnostics before sending work." };
     try {
       const response = await this.request("list_projects", {});
       if (!Array.isArray(response?.projects)) throw new Error("Desktop returned no project list");

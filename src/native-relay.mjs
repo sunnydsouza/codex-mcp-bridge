@@ -79,10 +79,14 @@ export function accountRelaySocketPath(env = process.env) {
 
 export function relayAccountContext(value) {
   if (value === undefined) return undefined;
-  if (!exactObject(value, ["claude", "codex"]) || Object.keys(value).length !== 2 || [value.claude, value.codex].some((item) => typeof item !== "string" || !/^[a-f0-9]{64}$/.test(item))) {
-    throw beforeWriteError(new NativeRelayError("A bound relay request requires exact Claude and Codex account fingerprints", "RELAY_BAD_REQUEST"));
+  const fingerprint = (item) => typeof item === "string" && /^[a-f0-9]{64}$/.test(item);
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : [];
+  const claudeBound = exactObject(value, ["claude", "codex"]) && keys.length === 2 && fingerprint(value.claude) && fingerprint(value.codex);
+  const externalBound = exactObject(value, ["codex"]) && keys.length === 1 && fingerprint(value.codex);
+  if (!claudeBound && !externalBound) {
+    throw beforeWriteError(new NativeRelayError("A bound relay request requires an exact Codex account fingerprint and, for Claude callers, an exact Claude account fingerprint", "RELAY_BAD_REQUEST"));
   }
-  return Object.freeze({ claude: value.claude, codex: value.codex });
+  return Object.freeze(claudeBound ? { claude: value.claude, codex: value.codex } : { codex: value.codex });
 }
 
 function beforeWriteError(error) {

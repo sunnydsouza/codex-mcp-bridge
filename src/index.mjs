@@ -28,7 +28,7 @@ import { desktopTasksConfigured } from "./native-relay.mjs";
 import { exitForVersionRequest } from "./cli-version.mjs";
 import { createRuntimeState } from "./runtime-state.mjs";
 import { assertRoutingReload, clientReloadReason, createReloadControl } from "./reload-control.mjs";
-import { accountIdentity, assertAccountIdentity, publicAccountState, readBridgeAccounts, requireBridgeAccounts } from "./bridge-account-context.mjs";
+import { assertAccountIdentity, bridgeCallerMode, callerAccountIdentity, publicAccountState, readBridgeAccounts, requireCallerAccounts } from "./bridge-account-context.mjs";
 import { assertClaudeSenderContext, readClaudeSenderContext, requireClaudeSenderContext, stopProcessInspectors } from "./claude-sender-context.mjs";
 import { AGENT_PROMPT_GUIDANCE, PROMPT_FIELD_HINT } from "./prompt-guidance.mjs";
 
@@ -55,6 +55,7 @@ const TERMINAL_TURN_STATUSES = new Set(["completed", "interrupted", "failed"]);
 const RELEASE_TURN_STATUSES = TERMINAL_TURN_STATUSES;
 const security = new BridgeSecurityPolicy();
 const desktopTasksEnabled = desktopTasksConfigured();
+const callerMode = bridgeCallerMode();
 const runtime = createRuntimeState({ configuration: desktopTasksConfigured });
 const desktopOperation = new AsyncLocalStorage();
 const desktopTasks = new DesktopTaskDelivery({ security, beforeRequest: beforeDesktopRequest, accountContext: () => desktopOperation.getStore()?.accounts });
@@ -64,17 +65,19 @@ async function assertDesktopOperation(context, { verifyProcess = false } = {}) {
   runtime.assertCurrent();
   const accounts = readBridgeAccounts();
   assertAccountIdentity(context.accounts, accounts);
-  await assertClaudeSenderContext(context.caller, {
-    account: accounts.claude,
-    ...(!verifyProcess ? { readAncestry: async () => context.caller.lineage } : {}),
-  });
+  if (context.callerMode === "claude") {
+    await assertClaudeSenderContext(context.caller, {
+      account: accounts.claude,
+      ...(!verifyProcess ? { readAncestry: async () => context.caller.lineage } : {}),
+    });
+  }
   assertAccountIdentity(context.accounts);
 }
 
 async function beforeDesktopRequest({ operation, args, phase }) {
   const context = desktopOperation.getStore();
   if (context?.diagnostic) return;
-  if (!context) throw new Error("Desktop operations require a verified calling Code session.");
+  if (!context) throw new Error("Desktop operations require a verified caller context.");
   const mutating = ["create_thread", "send_message_to_thread", "set_thread_title", "navigate_to_codex_page"].includes(operation);
   await assertDesktopOperation(context, { verifyProcess: mutating && phase === "write" });
   if (mutating) {
@@ -342,7 +345,7 @@ const server = new McpServer(
   { name: "codex-bridge", version: VERSION },
   {
     instructions:
-      "Bridge Claude work into Codex. When the user requests a new conversation or has given standing authorization to create one for each independent task, " +
+      "Bridge work into Codex. When the user requests a new conversation or has given standing authorization to create one for each independent task, " +
       "use delegate_to_codex or start_codex_thread with the initial prompt and a fresh requestId for each independent task or feature in Desktop mode, even in the same project. " +
       "In legacy app-server mode, use delegate_to_codex with the initial prompt and omit requestId; durable creation deduplication is unavailable there. " +
       "Reuse that requestId only for retries of that creation. Continue unfinished work, fixes, clarifications, and results in its verified original threadId with send_to_codex_thread. " +
@@ -364,9 +367,9 @@ function registerTool(name, definition, handler) {
         const state = runtime.status();
         if (!state.current) return { ...failure(new Error(`${state.reason}; reconnect this MCP server in the existing task.`)), structuredContent: { runtime: state } };
         const accounts = desktopTasksEnabled ? readBridgeAccounts() : null;
-        const result = await desktopOperation.run({ diagnostic: true, accounts: accountIdentity(accounts) }, () => handler(...args));
+        const result = await desktopOperation.run({ diagnostic: true, callerMode, accounts: callerAccountIdentity(accounts, callerMode) }, () => handler(...args));
         result.content.push({ type: "text", text: `runtime pid: ${state.pid}\nloaded source: ${state.revision}\nruntime state: current` });
-        result.structuredContent = { ...result.structuredContent, runtime: state };
+        result.structuredContent = { ...result.structuredContent, runtime: state, callerMode };
         if (desktopTasksEnabled) {
           result.structuredContent.accounts = { claude: publicAccountState(accounts.claude), codex: publicAccountState(accounts.codex) };
         }
@@ -375,9 +378,11 @@ function registerTool(name, definition, handler) {
       if (desktopTasksEnabled) {
         const deadline = Date.now() + Math.min((args[0]?.timeoutSec ?? 40) * 1000, DESKTOP_TOOL_BUDGET_MS);
         const accounts = readBridgeAccounts();
-        const identity = requireBridgeAccounts(accounts);
-        const caller = requireClaudeSenderContext(await readClaudeSenderContext({ account: accounts.claude }));
-        const context = { accounts: identity, caller, dispatched: false, deadline };
+        const identity = requireCallerAccounts(accounts, callerMode);
+        const caller = callerMode === "claude"
+          ? requireClaudeSenderContext(await readClaudeSenderContext({ account: accounts.claude }))
+          : null;
+        const context = { accounts: identity, caller, callerMode, dispatched: false, deadline };
         return await desktopOperation.run(context, async () => {
           try {
             await assertDesktopOperation(context);
@@ -402,7 +407,7 @@ registerTool(
   {
     title: "Delegate work to a new Codex session",
     description:
-      "Create a named Codex session at the requested project directory, send Claude's prompt into it, " +
+      "Create a named Codex session at the requested project directory, send the caller's prompt into it, " +
       "return Codex's reply, and hand the session to Codex Desktop without leaving the bridge writer lock behind. " +
       "Use for independent new work when the user explicitly or through standing instructions authorizes new conversations. " +
       "In Desktop mode, supply a fresh requestId per independent task and keep it on retries; omit requestId in legacy app-server mode. Use send_to_codex_thread for unfinished work.",
@@ -950,6 +955,7 @@ registerTool(
         `bridge version: ${VERSION}`,
         `node:           ${process.version} at ${process.execPath}`,
         "desktop tasks:  enabled; Desktop permissions, exact saved project, immediate visibility",
+        `caller mode:    ${callerMode === "external" ? "external; trusted MCP transport with Codex account binding" : "claude; verified Claude Desktop Code session"}`,
         `native relay:   ${native.available ? "available; verified through Codex Desktop" : "unavailable"}`,
         `native endpoint: ${native.socketPath}`,
         ...(native.available ? [`local projects: ${native.localProjects}`] : [`reason: ${native.reason}`]),
