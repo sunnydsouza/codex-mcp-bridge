@@ -132,6 +132,11 @@ describe("claude desktop installer", () => {
     assert.equal(cfg.mcpServers["codex-bridge"].env.CODEX_BRIDGE_AUTO_APPROVE_ACK, "1");
   });
 
+  it("persists an explicit external caller mode", () => {
+    const env = install({ config: configWith(null), env: { CODEX_BRIDGE_CALLER_MODE: "external" } }).mcpServers["codex-bridge"].env;
+    assert.equal(env.CODEX_BRIDGE_CALLER_MODE, "external");
+  });
+
   it("lets the operator revoke an existing auto-approval acknowledgement", () => {
     const config = configWith({ mcpServers: { "codex-bridge": { env: {
       CODEX_BRIDGE_APPROVAL: "approve", CODEX_BRIDGE_AUTO_APPROVE_ACK: "1",
@@ -153,6 +158,7 @@ describe("claude desktop installer", () => {
     assert.equal(env.CODEX_BRIDGE_SANDBOX, "workspace-write");
     assert.equal(env.CODEX_BRIDGE_OPEN_IN_APP, process.platform === "win32" ? "1" : "0");
     assert.equal(env.CODEX_BRIDGE_RELEASE_AFTER_TURN, process.platform === "win32" ? "1" : "0");
+    assert.equal(env.CODEX_BRIDGE_CALLER_MODE, "claude");
     assert.equal(env.CODEX_BIN, codexStub);
   });
 
