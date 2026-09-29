@@ -28,7 +28,7 @@ import { desktopTasksConfigured } from "./native-relay.mjs";
 import { exitForVersionRequest } from "./cli-version.mjs";
 import { createRuntimeState } from "./runtime-state.mjs";
 import { assertRoutingReload, clientReloadReason, createReloadControl } from "./reload-control.mjs";
-import { assertAccountIdentity, bridgeCallerMode, callerAccountIdentity, publicAccountState, readBridgeAccounts, requireCallerAccounts } from "./bridge-account-context.mjs";
+import { assertCallerAccountIdentity, bridgeCallerMode, callerAccountIdentity, publicAccountState, readBridgeAccounts, requireCallerAccounts } from "./bridge-account-context.mjs";
 import { assertClaudeSenderContext, readClaudeSenderContext, requireClaudeSenderContext, stopProcessInspectors } from "./claude-sender-context.mjs";
 import { AGENT_PROMPT_GUIDANCE, PROMPT_FIELD_HINT } from "./prompt-guidance.mjs";
 
@@ -64,14 +64,14 @@ async function assertDesktopOperation(context, { verifyProcess = false } = {}) {
   if (!context || context.diagnostic) return;
   runtime.assertCurrent();
   const accounts = readBridgeAccounts();
-  assertAccountIdentity(context.accounts, accounts);
+  assertCallerAccountIdentity(context.accounts, accounts);
   if (context.callerMode === "claude") {
     await assertClaudeSenderContext(context.caller, {
       account: accounts.claude,
       ...(!verifyProcess ? { readAncestry: async () => context.caller.lineage } : {}),
     });
   }
-  assertAccountIdentity(context.accounts);
+  assertCallerAccountIdentity(context.accounts);
 }
 
 async function beforeDesktopRequest({ operation, args, phase }) {

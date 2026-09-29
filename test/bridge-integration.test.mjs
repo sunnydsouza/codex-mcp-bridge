@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { readProcessAncestry } from "../src/claude-sender-context.mjs";
 import { readClaudeAccountContext } from "../src/desktop-account-context.mjs";
 import { readCodexAccountContext } from "../src/codex-account-context.mjs";
-import { assertAccountIdentity } from "../src/bridge-account-context.mjs";
+import { assertCallerAccountIdentity } from "../src/bridge-account-context.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execute = promisify(execFile);
@@ -27,7 +27,7 @@ function claudeFixtureRoot(home) {
 }
 
 function fixtureRelayServer({ home, socketPath, ...options }) {
-  const assertAccount = (expected) => assertAccountIdentity(expected, {
+  const assertAccount = (expected) => assertCallerAccountIdentity(expected, {
     claude: readClaudeAccountContext({ root: claudeFixtureRoot(home) }),
     codex: readCodexAccountContext({ root: path.join(home, ".codex") }),
   });

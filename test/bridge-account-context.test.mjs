@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { accountIdentity, assertAccountIdentity, bindUnsolicitedClaudeMessageAccount, bridgeCallerMode, callerAccountIdentity, requireBridgeAccounts, requireCallerAccounts, sameAccountIdentity } from "../src/bridge-account-context.mjs";
+import { accountIdentity, assertAccountIdentity, assertCallerAccountIdentity, bindUnsolicitedClaudeMessageAccount, bridgeCallerMode, callerAccountIdentity, requireBridgeAccounts, requireCallerAccounts, sameAccountIdentity, sameCallerAccountIdentity } from "../src/bridge-account-context.mjs";
 import { ReplyForwarder } from "../src/reply-forwarder.mjs";
 import { PeerEndpoint } from "../src/peer-protocol.mjs";
 
@@ -28,10 +28,11 @@ it("uses Codex-only account binding for an explicitly configured external caller
   assert.equal(Object.isFrozen(identity), true);
   assert.deepEqual(callerAccountIdentity(accounts, "external"), identity);
 
-  assert.equal(sameAccountIdentity(identity, signedIn("claude-b", "codex-a")), true, "Claude changes do not rebind an external caller");
-  assert.equal(sameAccountIdentity(identity, signedIn("claude-a", "codex-b")), false);
-  assert.doesNotThrow(() => assertAccountIdentity(identity, signedIn("claude-b", "codex-a")));
-  assert.throws(() => assertAccountIdentity(identity, signedIn("claude-a", "codex-b")), /Codex account changed/);
+  assert.equal(sameAccountIdentity(identity, signedIn("claude-b", "codex-a")), false, "Claude-side identity checks stay pair-bound");
+  assert.equal(sameCallerAccountIdentity(identity, signedIn("claude-b", "codex-a")), true, "Claude changes do not rebind an external caller");
+  assert.equal(sameCallerAccountIdentity(identity, signedIn("claude-a", "codex-b")), false);
+  assert.doesNotThrow(() => assertCallerAccountIdentity(identity, signedIn("claude-b", "codex-a")));
+  assert.throws(() => assertCallerAccountIdentity(identity, signedIn("claude-a", "codex-b")), /Codex account changed/);
   assert.throws(() => requireCallerAccounts({ ...accounts, codex: { status: "signed_out" } }, "external"), (error) => error.preflight.code === "BRIDGE_ACCOUNT_UNVERIFIED");
 });
 

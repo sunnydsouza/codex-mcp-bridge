@@ -39,13 +39,15 @@ export function callerAccountIdentity(accounts, mode = bridgeCallerMode()) {
 }
 
 export function sameAccountIdentity(expected, accounts) {
-  if (!expected?.codex) return false;
-  if (expected.claude) {
-    const current = accountIdentity(accounts);
-    return Boolean(current && expected.claude === current.claude && expected.codex === current.codex);
-  }
+  const current = accountIdentity(accounts);
+  return Boolean(expected?.claude && expected?.codex && current
+    && expected.claude === current.claude && expected.codex === current.codex);
+}
+
+export function sameCallerAccountIdentity(expected, accounts) {
+  if (expected?.claude) return sameAccountIdentity(expected, accounts);
   const current = codexAccountIdentity(accounts);
-  return Boolean(current && expected.codex === current.codex);
+  return Boolean(expected?.codex && current && expected.codex === current.codex);
 }
 
 export function requireBridgeAccounts(accounts) {
@@ -67,6 +69,14 @@ export function requireCallerAccounts(accounts, mode = bridgeCallerMode()) {
 
 export function assertAccountIdentity(expected, accounts = readBridgeAccounts()) {
   if (!sameAccountIdentity(expected, accounts)) {
+    const error = preflightFailure("BRIDGE_ACCOUNT_CHANGED", "The Claude or Codex account changed or signed out while this operation was pending. Its original destination was preserved; discover the current account before sending new work.");
+    error.code = "BRIDGE_ACCOUNT_CHANGED";
+    throw error;
+  }
+}
+
+export function assertCallerAccountIdentity(expected, accounts = readBridgeAccounts()) {
+  if (!sameCallerAccountIdentity(expected, accounts)) {
     const providers = expected?.claude ? "Claude or Codex account" : "Codex account";
     const error = preflightFailure("BRIDGE_ACCOUNT_CHANGED", `The ${providers} changed or signed out while this operation was pending. Its original destination was preserved; discover the current account before sending new work.`);
     error.code = "BRIDGE_ACCOUNT_CHANGED";

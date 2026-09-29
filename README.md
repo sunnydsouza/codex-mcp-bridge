@@ -65,6 +65,8 @@ CODEX_BRIDGE_CALLER_MODE=external
 
 Set both variables on the **codex-bridge process launched by your MCP gateway** and reconnect that MCP server. In external mode the bridge no longer requires a local Claude account or Claude process ancestry. It still requires a verified signed-in Codex ChatGPT account, carries that Codex account fingerprint through the bound native relay, rechecks it before dispatch and after pending operations, and keeps the existing workspace/thread/native-operation authorization.
 
+The Codex Desktop native companion must also be installed and reloaded from the same fork/version. Older upstream companions do not understand the Codex-only bound account context and will reject it before dispatch rather than silently downgrade the request.
+
 External mode does **not** authenticate the remote HTTP/SSE/Streamable-HTTP client that launches or reaches your MCP gateway. The stdio process boundary is the trust boundary. Use this mode only behind a gateway whose remote access is authenticated and restricted to you; never expose an unauthenticated bridge endpoint to the Internet. The default remains `CODEX_BRIDGE_CALLER_MODE=claude`, which retains the original Claude account and live Claude Desktop Code-session verification.
 
 ### Windows (PowerShell)

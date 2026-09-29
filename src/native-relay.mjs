@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { IS_MACOS, IS_WINDOWS, PLATFORM_LABEL, homeDir } from "./platform.mjs";
-import { assertAccountIdentity } from "./bridge-account-context.mjs";
+import { assertCallerAccountIdentity } from "./bridge-account-context.mjs";
 import { hardenedBridgeEnabled } from "./hardened-root-policy.mjs";
 
 /**
@@ -552,7 +552,7 @@ export async function resolveNativeToolsPipePath({
 }
 
 export class NativeToolsClient {
-  constructor({ env = process.env, socketPath = env.CODEX_APP_TOOLS_PIPE_PATH, timeoutMs = DEFAULT_TIMEOUT_MS, resolveSocketPath = () => resolveNativeToolsPipePath({ env }), assertAccount = assertAccountIdentity } = {}) {
+  constructor({ env = process.env, socketPath = env.CODEX_APP_TOOLS_PIPE_PATH, timeoutMs = DEFAULT_TIMEOUT_MS, resolveSocketPath = () => resolveNativeToolsPipePath({ env }), assertAccount = assertCallerAccountIdentity } = {}) {
     this.env = env;
     this.socketPath = socketPath;
     this.explicitSocketPath = socketPath || null;
