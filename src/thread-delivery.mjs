@@ -25,8 +25,11 @@ export const DESKTOP_TOOL_BUDGET_MS = 40000;
 const RELEASE_STATUSES = new Set(["completed", "interrupted", "failed"]);
 
 function sameAccountContext(expected, current) {
-  return Boolean(expected && current && ["claude", "codex"].every((provider) =>
-    typeof expected[provider] === "string" && expected[provider] === current[provider]));
+  if (!expected || !current || typeof expected.codex !== "string" || expected.codex !== current.codex) return false;
+  const expectedHasClaude = typeof expected.claude === "string";
+  const currentHasClaude = typeof current.claude === "string";
+  if (expectedHasClaude !== currentHasClaude) return false;
+  return !expectedHasClaude || expected.claude === current.claude;
 }
 
 export function matchDesktopProject(projects, cwd, { canonicalize = realpathSync.native, paths = path } = {}) {
@@ -144,7 +147,7 @@ export class DesktopTaskDelivery {
 
   async reuseReceipt(receipt, { cwd, promptHash, deadline, accountContext }) {
     if (!receipt) return null;
-    if (accountContext && (!receipt.accountContext || ["claude", "codex"].some((provider) => receipt.accountContext[provider] !== accountContext[provider]))) {
+    if (accountContext && (!receipt.accountContext || !sameAccountContext(receipt.accountContext, accountContext))) {
       throw new Error(`The existing Desktop creation receipt ${receipt.threadId ? `for task ${receipt.threadId} ` : ""}${receipt.accountContext ? "belongs to different accounts" : "has no verified original account binding"}. Its receipt and task ID were retained. No creation or prompt resend was attempted; inspect the explicit existing task before continuing.`);
     }
     if (path.relative(cwd, realpathSync.native(receipt.cwd))) throw new Error("The stored Desktop creation receipt belongs to another workspace. No prompt was sent.");
