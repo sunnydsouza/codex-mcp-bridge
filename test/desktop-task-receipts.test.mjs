@@ -89,6 +89,26 @@ describe("durable Desktop task creation receipts", () => {
     }
   });
 
+  it("persists only exact Claude+Codex or Codex-only account bindings", async () => {
+    const pair = { claude: "a".repeat(64), codex: "b".repeat(64) };
+    const external = { codex: "b".repeat(64) };
+
+    for (const accountContext of [pair, external]) {
+      const { store, key, receipt } = fixture();
+      await store.write(key, { ...receipt, accountContext });
+      assert.deepEqual((await store.read(key)).accountContext, accountContext);
+    }
+
+    for (const accountContext of [
+      { claude: "a".repeat(64) },
+      { codex: "b".repeat(64), extra: "c".repeat(64) },
+      { claude: "a".repeat(64), codex: "invalid" },
+    ]) {
+      const { store, key, receipt } = fixture();
+      await assert.rejects(store.write(key, { ...receipt, accountContext }), /unsafe or corrupt/);
+    }
+  });
+
   it("rejects corrupt and unsafe receipts without overwriting them", async () => {
     const { store, key, receipt } = fixture();
     assert.equal(await store.read(key), null);
