@@ -204,6 +204,27 @@ describe("Desktop creation receipts and deadlines", () => {
     assert.ok(checks >= 6);
   });
 
+  it("keeps a Codex-only external account bound across send and response observation", async (t) => {
+    const accounts = { codex: "b".repeat(64) };
+    const f = fixture(t, {
+      accountContext: () => ({ ...accounts }),
+      beforeRequest: () => {},
+      captureResponse: ({ threadId, expectedCwd }) => ({ status: "available", threadId, cwd: expectedCwd, marker: "external-before-send" }),
+      readResponse: () => ({ status: "completed", text: "External final", turnId: "new-turn", assistantItems: [{ id: "external-item", text: "External final" }], replySha256: "d".repeat(64), source: "codex_desktop_rollout" }),
+      dispatch({ operation }) {
+        if (operation === "send_message_to_thread") return { threadId: "task", status: "accepted" };
+        if (operation === "wait_threads") return { polls: [{ thread: { id: "task", hostId: "local", status: { type: "idle" } }, latestTurn: { id: "new-turn", status: "completed" }, latestAssistantMessage: null }] };
+        if (operation === "read_thread") return { thread: { id: "task", hostId: "local", cwd: f.cwd, title: "Task" }, turns: [{ id: f.calls.some((call) => call.operation === "send_message_to_thread") ? "new-turn" : "old-turn" }] };
+      },
+    });
+    const delivered = await f.delivery.send({ threadId: "task", prompt: "external prompt", cwd: f.cwd });
+    assert.deepEqual(delivered.responseObservation.accountContext, accounts);
+    const result = await f.delivery.wait("task", { timeoutMs: 1000, previousTurnId: delivered.previousTurnId, responseObservation: delivered.responseObservation });
+    assert.equal(result.text, "External final");
+    assert.equal(result.observationStatus, "completed");
+    assert.equal(f.calls.filter((call) => call.operation === "send_message_to_thread").length, 1);
+  });
+
   it("withholds a local response when the original account changes during observation", async (t) => {
     let accounts = { claude: "a".repeat(64), codex: "b".repeat(64) };
     const f = fixture(t, {
@@ -229,7 +250,7 @@ describe("Desktop creation receipts and deadlines", () => {
     accounts = null;
     const unavailable = await f.delivery.status();
     assert.equal(unavailable.available, false);
-    assert.match(unavailable.reason, /accounts could not both be verified/);
+    assert.match(unavailable.reason, /account context required by the configured caller mode could not be verified/);
     assert.equal(f.calls.length, 1);
   });
 
@@ -246,6 +267,26 @@ describe("Desktop creation receipts and deadlines", () => {
     assert.deepEqual(await f.receipts.read(key), receipt);
     assert.equal(receipt.threadId, created.threadId);
     assert.deepEqual(f.calls.map((call) => call.operation), ["list_projects", "create_thread"]);
+  });
+
+  it("reuses Codex-only external receipts but refuses cross-mode receipt reuse", async (t) => {
+    let accounts = { codex: "b".repeat(64) };
+    const f = fixture(t, { accountContext: () => ({ ...accounts }) });
+    const args = { cwd: f.cwd, name: "External bound task", prompt: "Private external original" };
+    const created = await f.delivery.create(args);
+    const key = f.receipts.key(args).key;
+    const receipt = await f.receipts.read(key);
+    assert.deepEqual(receipt.accountContext, accounts);
+
+    const reused = await f.createDelivery().create(args);
+    assert.equal(reused.threadId, created.threadId);
+    assert.equal(reused.reused, true);
+    assert.equal(f.calls.filter((call) => call.operation === "create_thread").length, 1);
+
+    accounts = { claude: "a".repeat(64), codex: "b".repeat(64) };
+    await assert.rejects(f.createDelivery().create(args), /different accounts.*retained.*No creation or prompt resend/);
+    assert.deepEqual(await f.receipts.read(key), receipt);
+    assert.equal(f.calls.filter((call) => call.operation === "create_thread").length, 1);
   });
 
   it("retains an unbound legacy receipt instead of reusing it or creating another task", async (t) => {

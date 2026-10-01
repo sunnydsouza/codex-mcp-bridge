@@ -21,6 +21,7 @@ import {
   nativeDispatchParams,
   nativeRelayStatus,
   nativeToolsPipeFromCommandLine,
+  nativeToolsPipeFromProcessListing,
   nativeToolsPipeCandidatesFromWindowsSnapshot,
   readRelayConfig,
   relayConfigPath,
@@ -1056,6 +1057,7 @@ async function nativePipe(onRequest, socketPath = tempSocket()) {
 
 describe("account-bound relay dispatch", () => {
   const accountContext = { claude: "a".repeat(64), codex: "b".repeat(64) };
+  const externalAccountContext = { codex: "b".repeat(64) };
   const changed = () => Object.assign(new Error("The active account changed"), { code: "BRIDGE_ACCOUNT_CHANGED" });
 
   it("checks an asynchronous first-leg preflight before writing any request", async () => {
@@ -1123,6 +1125,27 @@ describe("account-bound relay dispatch", () => {
     }
   });
 
+  it("carries a Codex-only external identity through the same bound relay protocol", async () => {
+    const verified = [];
+    const dispatched = [];
+    const server = new RelaySocketServer({
+      socketPath: tempSocket(), resolveExecutor: stubExecutor,
+      assertAccount: (accounts) => { assert.deepEqual(accounts, externalAccountContext); verified.push(accounts); },
+      dispatchDesktop: async (args, options) => { dispatched.push({ args, options }); return { success: true, contentItems: [{ type: "inputText", text: JSON.stringify({ projects: [] }) }] }; },
+    });
+    await server.start();
+    const relay = new NativeDesktopRelay({ socketPath: server.socketPath });
+    try {
+      const result = await relay.requestDesktop("list_projects", {}, { accountContext: externalAccountContext });
+      assert.equal(result.v, ACCOUNT_RELAY_PROTOCOL_VERSION);
+      assert.equal(verified.length, 1);
+      assert.deepEqual(dispatched[0].options.accountContext, externalAccountContext);
+      assert.equal(Object.hasOwn(dispatched[0].args, "accountContext"), false);
+    } finally {
+      server.stop();
+    }
+  });
+
   it("refuses a changed account at companion receipt before native dispatch", async () => {
     let dispatched = 0;
     const server = new RelaySocketServer({ socketPath: tempSocket(), resolveExecutor: stubExecutor, assertAccount: () => { throw changed(); }, dispatchDesktop: async () => { dispatched += 1; return { success: true }; } });
@@ -1142,6 +1165,7 @@ describe("account-bound relay dispatch", () => {
       { v: 2, targetThreadId: "target", message: "blocked" },
       { v: 2, targetThreadId: "target", message: "blocked", accountContext: undefined },
       { v: 2, targetThreadId: "target", message: "blocked", accountContext: { ...accountContext, extra: true } },
+      { v: 2, targetThreadId: "target", message: "blocked", accountContext: { claude: accountContext.claude } },
     ]) {
       const result = await handleRelayRequest(request, { resolveExecutor: stubExecutor, assertAccount: () => assert.fail("invalid envelopes must not authenticate"), dispatch: () => assert.fail("invalid envelopes must not dispatch") });
       assert.equal(result.ok, false);
@@ -1284,6 +1308,15 @@ describe("native tools pipe discovery", () => {
     }
   });
 
+  it("reads only the native pipe path from a macOS Codex app-server process listing", () => {
+    const commandLine = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true";
+    const socketPath = "/tmp/codex-browser-use/native-tools.sock";
+    const listing = `${commandLine} PATH=/usr/bin CODEX_APP_TOOLS_PIPE_PATH=${socketPath} USER=sunnydsouza\n`;
+    assert.equal(nativeToolsPipeFromProcessListing(commandLine, listing, { platform: "darwin" }), socketPath);
+    assert.equal(nativeToolsPipeFromProcessListing(commandLine, `${commandLine} CODEX_APP_TOOLS_PIPE_PATH=relative.sock`, { platform: "darwin" }), null);
+    assert.equal(nativeToolsPipeFromProcessListing("/usr/bin/node app-server", "/usr/bin/node app-server CODEX_APP_TOOLS_PIPE_PATH=/tmp/native.sock", { platform: "darwin" }), null);
+  });
+
   it("rejects a pipe embedded in another process or a non-app-server invocation", () => {
     const commands = [
       ["other.exe", "app-server", "-c", config(windowsPipe)],
@@ -1362,6 +1395,27 @@ describe("native tools pipe discovery", () => {
     });
     assert.equal(resolved, windowsPipe);
     assert.deepEqual(probed, [1234]);
+  });
+
+  it("discovers the macOS native pipe from the direct Codex app-server environment", async () => {
+    const socketPath = "/tmp/codex-browser-use/native-tools.sock";
+    const parentCommandLine = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true";
+    const resolved = await resolveNativeToolsPipePath({
+      env: {},
+      platform: "darwin",
+      parentPid: 27397,
+      readParentCommandLine: async (pid) => {
+        assert.equal(pid, 27397);
+        return parentCommandLine;
+      },
+      readParentNativeToolsPipePath: async (pid, commandLine, platform) => {
+        assert.equal(pid, 27397);
+        assert.equal(commandLine, parentCommandLine);
+        assert.equal(platform, "darwin");
+        return socketPath;
+      },
+    });
+    assert.equal(resolved, socketPath);
   });
 
   it("leaves discovery unavailable when its parent is not Codex or cannot be read", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { accountIdentity, assertAccountIdentity, bindUnsolicitedClaudeMessageAccount, requireBridgeAccounts, sameAccountIdentity } from "../src/bridge-account-context.mjs";
+import { accountIdentity, assertAccountIdentity, assertCallerAccountIdentity, bindUnsolicitedClaudeMessageAccount, bridgeCallerMode, callerAccountIdentity, requireBridgeAccounts, requireCallerAccounts, sameAccountIdentity, sameCallerAccountIdentity } from "../src/bridge-account-context.mjs";
 import { ReplyForwarder } from "../src/reply-forwarder.mjs";
 import { PeerEndpoint } from "../src/peer-protocol.mjs";
 
@@ -15,6 +15,25 @@ it("rechecks both identities for every call across repeated account switches", (
     assert.equal(sameAccountIdentity(identity, accounts), true);
     assert.doesNotThrow(() => assertAccountIdentity(identity, accounts));
   }
+});
+
+it("uses Codex-only account binding for an explicitly configured external caller", () => {
+  assert.equal(bridgeCallerMode({}), "claude");
+  assert.equal(bridgeCallerMode({ CODEX_BRIDGE_CALLER_MODE: "EXTERNAL" }), "external");
+  assert.throws(() => bridgeCallerMode({ CODEX_BRIDGE_CALLER_MODE: "browser" }), /claude or external/);
+
+  const accounts = signedIn();
+  const identity = requireCallerAccounts(accounts, "external");
+  assert.deepEqual(identity, { codex: "codex-a" });
+  assert.equal(Object.isFrozen(identity), true);
+  assert.deepEqual(callerAccountIdentity(accounts, "external"), identity);
+
+  assert.equal(sameAccountIdentity(identity, signedIn("claude-b", "codex-a")), false, "Claude-side identity checks stay pair-bound");
+  assert.equal(sameCallerAccountIdentity(identity, signedIn("claude-b", "codex-a")), true, "Claude changes do not rebind an external caller");
+  assert.equal(sameCallerAccountIdentity(identity, signedIn("claude-a", "codex-b")), false);
+  assert.doesNotThrow(() => assertCallerAccountIdentity(identity, signedIn("claude-b", "codex-a")));
+  assert.throws(() => assertCallerAccountIdentity(identity, signedIn("claude-a", "codex-b")), /Codex account changed/);
+  assert.throws(() => requireCallerAccounts({ ...accounts, codex: { status: "signed_out" } }, "external"), (error) => error.preflight.code === "BRIDGE_ACCOUNT_UNVERIFIED");
 });
 
 it("refuses signed-out and incomplete sign-in states without claiming a dispatch", () => {

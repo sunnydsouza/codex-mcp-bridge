@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { IS_MACOS, IS_WINDOWS, PLATFORM_LABEL, homeDir } from "./platform.mjs";
-import { assertAccountIdentity } from "./bridge-account-context.mjs";
+import { assertCallerAccountIdentity } from "./bridge-account-context.mjs";
 import { hardenedBridgeEnabled } from "./hardened-root-policy.mjs";
 
 /**
@@ -79,10 +79,14 @@ export function accountRelaySocketPath(env = process.env) {
 
 export function relayAccountContext(value) {
   if (value === undefined) return undefined;
-  if (!exactObject(value, ["claude", "codex"]) || Object.keys(value).length !== 2 || [value.claude, value.codex].some((item) => typeof item !== "string" || !/^[a-f0-9]{64}$/.test(item))) {
-    throw beforeWriteError(new NativeRelayError("A bound relay request requires exact Claude and Codex account fingerprints", "RELAY_BAD_REQUEST"));
+  const fingerprint = (item) => typeof item === "string" && /^[a-f0-9]{64}$/.test(item);
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : [];
+  const claudeBound = exactObject(value, ["claude", "codex"]) && keys.length === 2 && fingerprint(value.claude) && fingerprint(value.codex);
+  const externalBound = exactObject(value, ["codex"]) && keys.length === 1 && fingerprint(value.codex);
+  if (!claudeBound && !externalBound) {
+    throw beforeWriteError(new NativeRelayError("A bound relay request requires an exact Codex account fingerprint and, for Claude callers, an exact Claude account fingerprint", "RELAY_BAD_REQUEST"));
   }
-  return Object.freeze({ claude: value.claude, codex: value.codex });
+  return Object.freeze(claudeBound ? { claude: value.claude, codex: value.codex } : { codex: value.codex });
 }
 
 function beforeWriteError(error) {
@@ -408,6 +412,66 @@ export function nativeToolsPipeFromCommandLine(commandLine, { platform = process
   return candidates.length && new Set(candidates).size === 1 ? candidates[0] : null;
 }
 
+function isCodexAppServerCommandLine(commandLine, platform) {
+  if (typeof commandLine !== "string" || /[\r\n\0]/.test(commandLine)) return false;
+  const args = splitDesktopCommandLine(commandLine, platform);
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  if (!/^codex(?:\.exe)?$/i.test(paths.basename(args[0] ?? ""))) return false;
+  let appServer = false;
+  for (let index = 1; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "-c" || arg === "--config") index++;
+    else if (arg.startsWith("--config=")) continue;
+    else if (arg === "app-server") appServer = true;
+    else if (!arg.startsWith("-") && !appServer) return false;
+  }
+  return appServer;
+}
+
+function isNativeRelaySupervisorCommandLine(commandLine, platform) {
+  if (typeof commandLine !== "string" || /[\r\n\0]/.test(commandLine)) return false;
+  const args = splitDesktopCommandLine(commandLine, platform);
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  return args.some((arg, index) => paths.isAbsolute(arg)
+    && paths.basename(arg) === "mcp-supervisor.mjs"
+    && args[index + 1] === "native-relay-companion.mjs");
+}
+
+function validNativeToolsPipePath(value, platform) {
+  if (typeof value !== "string" || !value || /[\r\n\0]/.test(value)) return false;
+  return platform === "win32"
+    ? /^\\\\\.\\pipe\\[^\\]/i.test(value)
+    : path.posix.isAbsolute(value);
+}
+
+/**
+ * macOS exposes a process's environment through `ps eww`. Codex Desktop keeps
+ * its native-tools socket path in the app-server environment, but does not
+ * forward that variable to MCP child processes. Only read the named pipe
+ * variable, and only when the process listing is for the Codex app-server
+ * ancestor; never retain or log the rest of its environment.
+ */
+export function nativeToolsPipeFromProcessListing(commandLine, processListing, { platform = process.platform } = {}) {
+  if (platform !== "darwin" || !isCodexAppServerCommandLine(commandLine, platform) || typeof processListing !== "string") return null;
+  const argv = commandLine.trimEnd();
+  const listing = processListing.replace(/[\r\n]+$/, "");
+  if (/[\r\n\0]/.test(listing)) return null;
+  if (!listing.startsWith(argv)) return null;
+
+  const environment = listing.slice(argv.length);
+  const assignments = [...environment.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=/g)];
+  const pipeAssignments = assignments.filter((entry) => entry[1] === "CODEX_APP_TOOLS_PIPE_PATH");
+  if (pipeAssignments.length !== 1) return null;
+  const assignment = pipeAssignments[0];
+  const valueStart = assignment.index + assignment[0].length;
+  const nextAssignment = assignments.find((entry) => entry.index > assignment.index);
+  let value = environment.slice(valueStart, nextAssignment?.index ?? environment.length).trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1);
+  }
+  return validNativeToolsPipePath(value, platform) ? value : null;
+}
+
 async function readParentCommandLine(parentPid, platform) {
   if (!Number.isSafeInteger(parentPid) || parentPid <= 0) return null;
   const options = { timeout: 5000, maxBuffer: 128 * 1024, windowsHide: true };
@@ -419,6 +483,24 @@ async function readParentCommandLine(parentPid, platform) {
   }
   const { stdout } = await execFileAsync("/bin/ps", ["-ww", "-p", String(parentPid), "-o", "args="], options);
   return stdout.trim();
+}
+
+async function readProcessParentPid(processId, platform) {
+  if (platform !== "darwin" || !Number.isSafeInteger(processId) || processId <= 0) return null;
+  const { stdout } = await execFileAsync("/bin/ps", ["-p", String(processId), "-o", "ppid="], {
+    timeout: 5000, maxBuffer: 1024, windowsHide: true,
+  });
+  const parentPid = Number(stdout.trim());
+  return Number.isSafeInteger(parentPid) && parentPid > 1 ? parentPid : null;
+}
+
+async function readParentNativeToolsPipePath(parentPid, commandLine, platform) {
+  if (platform !== "darwin" || !Number.isSafeInteger(parentPid) || parentPid <= 0 ||
+      !isCodexAppServerCommandLine(commandLine, platform)) return null;
+  const { stdout } = await execFileAsync("/bin/ps", ["eww", "-p", String(parentPid), "-o", "command="], {
+    timeout: 5000, maxBuffer: 128 * 1024, windowsHide: true,
+  });
+  return nativeToolsPipeFromProcessListing(commandLine, stdout, { platform });
 }
 
 export function nativeToolsPipeCandidatesFromWindowsSnapshot(snapshot, { parentPid, localAppData = process.env.LOCALAPPDATA } = {}) {
@@ -523,14 +605,33 @@ export async function resolveNativeToolsPipePath({
   parentPid = process.ppid,
   platform = process.platform,
   readParentCommandLine: readParent = readParentCommandLine,
+  readProcessParentPid: readPpid = readProcessParentPid,
+  readParentNativeToolsPipePath: readParentPipe = readParentNativeToolsPipePath,
   readWindowsSnapshot = readWindowsNativePipeSnapshot,
   probeWindowsPipe = probeWindowsNativeToolsPipe,
   windowsDiscoveryTimeoutMs = 7000,
 } = {}) {
   if (env.CODEX_APP_TOOLS_PIPE_PATH) return env.CODEX_APP_TOOLS_PIPE_PATH;
   try {
-    const inherited = nativeToolsPipeFromCommandLine(await readParent(parentPid, platform), { platform });
+    const parentCommandLine = await readParent(parentPid, platform);
+    const inherited = nativeToolsPipeFromCommandLine(parentCommandLine, { platform });
     if (inherited) return inherited;
+    if (platform === "darwin" && isCodexAppServerCommandLine(parentCommandLine, platform)) {
+      const parentPipe = await readParentPipe(parentPid, parentCommandLine, platform);
+      if (validNativeToolsPipePath(parentPipe, platform)) return parentPipe;
+    }
+    if (platform === "darwin" && isNativeRelaySupervisorCommandLine(parentCommandLine, platform)) {
+      const appServerPid = await readPpid(parentPid, platform);
+      if (appServerPid) {
+        const appServerCommandLine = await readParent(appServerPid, platform);
+        if (isCodexAppServerCommandLine(appServerCommandLine, platform)) {
+          const inherited = nativeToolsPipeFromCommandLine(appServerCommandLine, { platform });
+          if (inherited) return inherited;
+          const parentPipe = await readParentPipe(appServerPid, appServerCommandLine, platform);
+          if (validNativeToolsPipePath(parentPipe, platform)) return parentPipe;
+        }
+      }
+    }
   } catch {}
   if (platform !== "win32") return null;
   const deadline = Date.now() + Math.max(1, Math.min(7000, Number(windowsDiscoveryTimeoutMs) || 7000));
@@ -548,7 +649,7 @@ export async function resolveNativeToolsPipePath({
 }
 
 export class NativeToolsClient {
-  constructor({ env = process.env, socketPath = env.CODEX_APP_TOOLS_PIPE_PATH, timeoutMs = DEFAULT_TIMEOUT_MS, resolveSocketPath = () => resolveNativeToolsPipePath({ env }), assertAccount = assertAccountIdentity } = {}) {
+  constructor({ env = process.env, socketPath = env.CODEX_APP_TOOLS_PIPE_PATH, timeoutMs = DEFAULT_TIMEOUT_MS, resolveSocketPath = () => resolveNativeToolsPipePath({ env }), assertAccount = assertCallerAccountIdentity } = {}) {
     this.env = env;
     this.socketPath = socketPath;
     this.explicitSocketPath = socketPath || null;

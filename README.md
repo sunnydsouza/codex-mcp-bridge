@@ -47,11 +47,27 @@ Choose the mode for the conversations you want to connect:
 | Platform | Mode | Required clients |
 |---|---|---|
 | Windows / macOS | Native Desktop tasks | Signed-in Codex Desktop and a Claude **Code** session in Claude Desktop |
+| Windows / macOS | Native Desktop tasks, external MCP caller | Signed-in Codex Desktop and an authenticated/trusted MCP gateway |
 | Linux / WSL | CLI / app-server | Signed-in Codex CLI and a running Claude Code CLI session |
 
 The bridge requires **Node.js 22+**; Node 24 LTS is a suitable starting point. If Node is already managed by a version manager, use that installation. Install the bridge under the same OS user as the clients. A global npm install does not require cloning this repository.
 
-For Desktop mode, install [Codex Desktop](https://developers.openai.com/codex/app) and [Claude Desktop](https://claude.com/download), sign in, and save the intended local project in Codex Desktop. Open that same directory in Claude Desktop's Code tab. A normal Claude chat is not a Code session.
+For the default `claude` caller mode, install [Codex Desktop](https://developers.openai.com/codex/app) and [Claude Desktop](https://claude.com/download), sign in, and save the intended local project in Codex Desktop. Open that same directory in Claude Desktop's Code tab. A normal Claude chat is not a Code session.
+
+#### External MCP callers (ChatGPT Web / authenticated gateways)
+
+Desktop task delivery can also be used by an MCP process that is not launched from a Claude Desktop Code session. This is intentionally opt-in:
+
+```bash
+CODEX_BRIDGE_DESKTOP_TASKS=1
+CODEX_BRIDGE_CALLER_MODE=external
+```
+
+Set both variables on the **codex-bridge process launched by your MCP gateway** and reconnect that MCP server. In external mode the bridge no longer requires a local Claude account or Claude process ancestry. It still requires a verified signed-in Codex ChatGPT account, carries that Codex account fingerprint through the bound native relay, rechecks it before dispatch and after pending operations, and keeps the existing workspace/thread/native-operation authorization.
+
+The Codex Desktop native companion must also be installed and reloaded from the same fork/version. Older upstream companions do not understand the Codex-only bound account context and will reject it before dispatch rather than silently downgrade the request.
+
+External mode does **not** authenticate the remote HTTP/SSE/Streamable-HTTP client that launches or reaches your MCP gateway. The stdio process boundary is the trust boundary. Use this mode only behind a gateway whose remote access is authenticated and restricted to you; never expose an unauthenticated bridge endpoint to the Internet. The default remains `CODEX_BRIDGE_CALLER_MODE=claude`, which retains the original Claude account and live Claude Desktop Code-session verification.
 
 ### Windows (PowerShell)
 

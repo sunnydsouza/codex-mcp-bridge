@@ -25,7 +25,7 @@ import {
 } from "./native-relay.mjs";
 import { IS_WINDOWS, PLATFORM_LABEL } from "./platform.mjs";
 import { exitForVersionRequest } from "./cli-version.mjs";
-import { assertAccountIdentity } from "./bridge-account-context.mjs";
+import { assertCallerAccountIdentity } from "./bridge-account-context.mjs";
 import { createReloadControl } from "./reload-control.mjs";
 import { createRuntimeState } from "./runtime-state.mjs";
 import { hardenedBridgeEnabled } from "./hardened-root-policy.mjs";
@@ -238,7 +238,7 @@ export function createNativeScopeAuthorizer({ dispatchDesktop, env = process.env
  */
 export async function handleRelayRequest(
   payload,
-  { dispatch, dispatchDesktop, resolveExecutor = resolveRelayThreadId, env = process.env, assertAccount = assertAccountIdentity, authorize, strict = hardenedBridgeEnabled(env) } = {},
+  { dispatch, dispatchDesktop, resolveExecutor = resolveRelayThreadId, env = process.env, assertAccount = assertCallerAccountIdentity, authorize, strict = hardenedBridgeEnabled(env) } = {},
 ) {
   if (strict && (!boundRequest(payload) || !validProtocol(payload))) return errorResponse("RELAY_BAD_REQUEST", "Hardened relay accepts only protocol 2 requests with account context", false);
   if (strict && typeof authorize !== "function") return errorResponse("NATIVE_SCOPE_UNVERIFIED", "Hardened relay requires verified current native project and task metadata; no dispatch was attempted", false);
@@ -352,7 +352,7 @@ export class RelaySocketServer {
     dispatch,
     dispatchDesktop,
     resolveExecutor = resolveRelayThreadId,
-    assertAccount = assertAccountIdentity,
+    assertAccount = assertCallerAccountIdentity,
     authorize,
     requireAccountContext = false,
     strict = hardenedBridgeEnabled(),

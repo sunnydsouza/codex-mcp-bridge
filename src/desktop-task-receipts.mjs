@@ -15,6 +15,15 @@ const receiptKey = ({ cwd, name, promptHash, requestId }) => digest(JSON.stringi
   ? [canonicalCwd(cwd), "request", requestId.toLowerCase()]
   : [canonicalCwd(cwd), normalizedName(name) || promptHash]));
 
+function validAccountContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  const fingerprint = (provider) => typeof value[provider] === "string" && HASH.test(value[provider]);
+  if (keys.length === 1) return keys[0] === "codex" && fingerprint("codex");
+  return keys.length === 2 && keys.includes("claude") && keys.includes("codex")
+    && fingerprint("claude") && fingerprint("codex");
+}
+
 function assertKey(key) {
   if (typeof key !== "string" || !HASH.test(key)) throw new Error("Invalid Desktop task receipt key; refusing unsafe filesystem access.");
 }
@@ -31,8 +40,7 @@ function validateReceipt(key, receipt) {
     && nonemptyString(receipt.cwd) && path.isAbsolute(receipt.cwd)
     && ["pending", "unknown", "known"].includes(receipt.state)
     && Number.isSafeInteger(receipt.startedAt) && receipt.startedAt >= 0
-    && (receipt.accountContext === undefined || receipt.accountContext && typeof receipt.accountContext === "object" && !Array.isArray(receipt.accountContext)
-      && Object.keys(receipt.accountContext).length === 2 && ["claude", "codex"].every((provider) => typeof receipt.accountContext[provider] === "string" && HASH.test(receipt.accountContext[provider])))
+    && (receipt.accountContext === undefined || validAccountContext(receipt.accountContext))
     && ["threadId", "projectId", "projectName", "name"].every((field) => receipt[field] === undefined || nonemptyString(receipt[field]))
     && (receipt.state !== "known" || nonemptyString(receipt.threadId));
   if (!valid) throw unsafeReceipt(key);

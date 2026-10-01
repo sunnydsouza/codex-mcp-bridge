@@ -7,6 +7,18 @@ import { readClaudeDesktopContext } from "./claude-desktop-context.mjs";
 const unsolicitedAccountInspections = new WeakSet();
 const MAX_SESSION_CANDIDATES = 8192;
 
+const CALLER_MODES = new Set(["claude", "external"]);
+
+function normalizeCallerMode(value) {
+  const mode = String(value ?? "claude").trim().toLowerCase();
+  if (!CALLER_MODES.has(mode)) throw new Error("CODEX_BRIDGE_CALLER_MODE must be either claude or external");
+  return mode;
+}
+
+export function bridgeCallerMode(env = process.env) {
+  return normalizeCallerMode(env.CODEX_BRIDGE_CALLER_MODE);
+}
+
 export function readBridgeAccounts() {
   return { claude: readClaudeAccountContext(), codex: readCodexAccountContext() };
 }
@@ -17,10 +29,25 @@ export function accountIdentity(accounts) {
   return Object.freeze({ claude: accounts.claude.fingerprint, codex: accounts.codex.fingerprint });
 }
 
+export function codexAccountIdentity(accounts) {
+  if (accounts?.codex?.status !== "verified" || typeof accounts.codex.fingerprint !== "string" || !accounts.codex.fingerprint) return null;
+  return Object.freeze({ codex: accounts.codex.fingerprint });
+}
+
+export function callerAccountIdentity(accounts, mode = bridgeCallerMode()) {
+  return normalizeCallerMode(mode) === "external" ? codexAccountIdentity(accounts) : accountIdentity(accounts);
+}
+
 export function sameAccountIdentity(expected, accounts) {
   const current = accountIdentity(accounts);
   return Boolean(expected?.claude && expected?.codex && current
     && expected.claude === current.claude && expected.codex === current.codex);
+}
+
+export function sameCallerAccountIdentity(expected, accounts) {
+  if (expected?.claude) return sameAccountIdentity(expected, accounts);
+  const current = codexAccountIdentity(accounts);
+  return Boolean(expected?.codex && current && expected.codex === current.codex);
 }
 
 export function requireBridgeAccounts(accounts) {
@@ -32,9 +59,26 @@ export function requireBridgeAccounts(accounts) {
   return accountIdentity(accounts);
 }
 
+export function requireCallerAccounts(accounts, mode = bridgeCallerMode()) {
+  if (normalizeCallerMode(mode) !== "external") return requireBridgeAccounts(accounts);
+  if (accounts?.codex?.status !== "verified" || typeof accounts.codex.fingerprint !== "string" || !accounts.codex.fingerprint) {
+    throw preflightFailure("BRIDGE_ACCOUNT_UNVERIFIED", `Codex account is ${accounts?.codex?.status ?? "unavailable"}: ${accounts?.codex?.reason ?? "No current account evidence"}. Finish signing in; the next call will discover the account again.`);
+  }
+  return codexAccountIdentity(accounts);
+}
+
 export function assertAccountIdentity(expected, accounts = readBridgeAccounts()) {
   if (!sameAccountIdentity(expected, accounts)) {
     const error = preflightFailure("BRIDGE_ACCOUNT_CHANGED", "The Claude or Codex account changed or signed out while this operation was pending. Its original destination was preserved; discover the current account before sending new work.");
+    error.code = "BRIDGE_ACCOUNT_CHANGED";
+    throw error;
+  }
+}
+
+export function assertCallerAccountIdentity(expected, accounts = readBridgeAccounts()) {
+  if (!sameCallerAccountIdentity(expected, accounts)) {
+    const providers = expected?.claude ? "Claude or Codex account" : "Codex account";
+    const error = preflightFailure("BRIDGE_ACCOUNT_CHANGED", `The ${providers} changed or signed out while this operation was pending. Its original destination was preserved; discover the current account before sending new work.`);
     error.code = "BRIDGE_ACCOUNT_CHANGED";
     throw error;
   }
