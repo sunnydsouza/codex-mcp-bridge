@@ -21,6 +21,7 @@ import {
   nativeDispatchParams,
   nativeRelayStatus,
   nativeToolsPipeFromCommandLine,
+  nativeToolsPipeFromProcessListing,
   nativeToolsPipeCandidatesFromWindowsSnapshot,
   readRelayConfig,
   relayConfigPath,
@@ -1307,6 +1308,15 @@ describe("native tools pipe discovery", () => {
     }
   });
 
+  it("reads only the native pipe path from a macOS Codex app-server process listing", () => {
+    const commandLine = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true";
+    const socketPath = "/tmp/codex-browser-use/native-tools.sock";
+    const listing = `${commandLine} PATH=/usr/bin CODEX_APP_TOOLS_PIPE_PATH=${socketPath} USER=sunnydsouza\n`;
+    assert.equal(nativeToolsPipeFromProcessListing(commandLine, listing, { platform: "darwin" }), socketPath);
+    assert.equal(nativeToolsPipeFromProcessListing(commandLine, `${commandLine} CODEX_APP_TOOLS_PIPE_PATH=relative.sock`, { platform: "darwin" }), null);
+    assert.equal(nativeToolsPipeFromProcessListing("/usr/bin/node app-server", "/usr/bin/node app-server CODEX_APP_TOOLS_PIPE_PATH=/tmp/native.sock", { platform: "darwin" }), null);
+  });
+
   it("rejects a pipe embedded in another process or a non-app-server invocation", () => {
     const commands = [
       ["other.exe", "app-server", "-c", config(windowsPipe)],
@@ -1385,6 +1395,27 @@ describe("native tools pipe discovery", () => {
     });
     assert.equal(resolved, windowsPipe);
     assert.deepEqual(probed, [1234]);
+  });
+
+  it("discovers the macOS native pipe from the direct Codex app-server environment", async () => {
+    const socketPath = "/tmp/codex-browser-use/native-tools.sock";
+    const parentCommandLine = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true";
+    const resolved = await resolveNativeToolsPipePath({
+      env: {},
+      platform: "darwin",
+      parentPid: 27397,
+      readParentCommandLine: async (pid) => {
+        assert.equal(pid, 27397);
+        return parentCommandLine;
+      },
+      readParentNativeToolsPipePath: async (pid, commandLine, platform) => {
+        assert.equal(pid, 27397);
+        assert.equal(commandLine, parentCommandLine);
+        assert.equal(platform, "darwin");
+        return socketPath;
+      },
+    });
+    assert.equal(resolved, socketPath);
   });
 
   it("leaves discovery unavailable when its parent is not Codex or cannot be read", async () => {

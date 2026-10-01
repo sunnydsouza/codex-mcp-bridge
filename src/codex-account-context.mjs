@@ -100,12 +100,14 @@ export function readCodexAccountContext({ env = process.env, root } = {}) {
       return result("unavailable", "Codex account evidence is incomplete or malformed; retry on the next call");
     }
     if (!object(auth)) return result("unavailable", "Codex account evidence is not an object");
-    if (auth.auth_mode !== "chatgpt") return result("unavailable", "Codex account detection requires a stored ChatGPT login; external tokens and other authentication modes are unavailable");
+    const hasAuthMode = Object.hasOwn(auth, "auth_mode");
+    if (hasAuthMode && auth.auth_mode !== "chatgpt") return result("unavailable", "Codex account detection requires a stored ChatGPT login; external tokens and other authentication modes are unavailable");
     const accountId = identity(auth.tokens?.account_id);
     if (!accountId) return result("unavailable", "Codex account evidence has no stable account ID; retry after sign-in completes");
     const decoded = tokenIdentity(auth.tokens?.id_token);
     if (!decoded.userId) return result("unavailable", "Codex account evidence has no stable user ID; no identity was inferred");
     if (decoded.accountId && decoded.accountId !== accountId) return result("unavailable", "Codex account and user identity evidence disagree; retry on the next call");
+    if (!hasAuthMode && decoded.accountId !== accountId) return result("unavailable", "Codex account evidence without an explicit login mode requires a matching ChatGPT account ID in the user identity token");
     configAllowsFile(path.join(home, "config.toml"));
     if (readStable(source, MAX_AUTH_BYTES) !== text) return result("unavailable", "Codex account evidence changed during identity verification; retry on the next call");
     const fingerprint = createHash("sha256").update(JSON.stringify(["codex", accountId, decoded.userId])).digest("hex");

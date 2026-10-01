@@ -158,6 +158,24 @@ it("rejects external tokens and other authentication modes", () => {
   }
 });
 
+it("accepts an omitted auth mode only when the ID token binds the ChatGPT account", () => {
+  const f = fixture();
+  const auth = JSON.parse(fs.readFileSync(f.source, "utf8"));
+  delete auth.auth_mode;
+  fs.writeFileSync(f.source, JSON.stringify(auth));
+
+  const verified = f.read();
+  assert.equal(verified.status, "verified");
+  assert.equal(verified.accountId, "account-a");
+  assert.equal(verified.userId, "user-a");
+
+  auth.tokens.id_token = token({ sub: "user-a" });
+  fs.writeFileSync(f.source, JSON.stringify(auth));
+  const unbound = f.read();
+  assert.equal(unbound.status, "unavailable");
+  assert.match(unbound.reason, /matching ChatGPT account ID/);
+});
+
 it("rejects non-regular and oversized evidence without reading beyond its limits", () => {
   const f = fixture();
   fs.unlinkSync(f.source);
